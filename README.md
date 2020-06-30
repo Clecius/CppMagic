@@ -1,5 +1,6 @@
+![](https://user-images.githubusercontent.com/7787140/86186364-4719d400-bb0f-11ea-9eaf-686fca7b139f.png)
 # CppMagic
-A Python 3 script to help build C/C++ project cross-platform using whatever desired simple editor.
+A Python 3 script to help build C/C++ projects cross-platform.
 
 ---
 
