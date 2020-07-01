@@ -87,7 +87,7 @@ The `Run Task...` menu from VSCode will become like this:
 ![runtask](https://user-images.githubusercontent.com/7787140/86171719-905c2a80-baf3-11ea-93b9-25f6230cb41a.png)
 
 
-### What next
+### What next?
 In the future I intend to finish Clang support and some routines to import projects from other tools.
 
 ## Project Sample Configuration
@@ -389,6 +389,6 @@ Follow as an example the configuration that I am using on a personal project.
 
 ![cppwsfiles](https://user-images.githubusercontent.com/7787140/86189242-661c6400-bb17-11ea-89b3-62b66d23130f.png)
 
-**Visual Studio Code for Linux and Windows working side by side using Virtual Box resource of Seamless Mode.**
+**Visual Studio Code for Linux and Windows working side by side using Virtual Box in Seamless Mode.**
 
 ![seamlessmode](https://user-images.githubusercontent.com/7787140/86189248-6a488180-bb17-11ea-8eb7-9a2c5bb8c452.png)
