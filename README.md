@@ -386,7 +386,9 @@ Follow as an example the configuration that I am using on a personal project.
 ```
 
 **Project Tree**
+
 ![cppwsfiles](https://user-images.githubusercontent.com/7787140/86189242-661c6400-bb17-11ea-89b3-62b66d23130f.png)
 
 **Visual Studio Code for Linux and Windows working side by side using Virtual Box resource of Seamless Mode.**
+
 ![seamlessmode](https://user-images.githubusercontent.com/7787140/86189248-6a488180-bb17-11ea-8eb7-9a2c5bb8c452.png)
