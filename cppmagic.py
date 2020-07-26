@@ -8,7 +8,10 @@
 #|
 #| https://github.com/Clecius/CppMagic.git
 #|
-VERSION = '0.9'
+
+# pylint: disable=E1101
+
+VERSION = '0.9.1'
 
 import platform
 import os
@@ -133,22 +136,28 @@ def OsCmd(cmd, wait = True):
   global OsResp
   OsResp = ''
   Posix = 'posix' in sys.builtin_module_names
-  Cmd = ''
+  Shell = ''
   if Posix:
-    Cmd = '/bin/sh'
+    Shell = '/bin/sh'
   else:
-    Cmd = 'cmd.exe'
-  OCProc = Popen(Cmd,
-  shell=True, universal_newlines=True, bufsize=-1, close_fds=Posix,
-  stdout=PIPE, stderr=PIPE, stdin=PIPE)
+    Shell = 'cmd.exe'
+  OsProc = Popen(Shell,
+  shell=True,
+  encoding='utf-8',
+  bufsize=-1,
+  close_fds=Posix,
+  stdout=PIPE,
+  stderr=PIPE,
+  stdin=PIPE)
   if wait:
-    OsResp, err = OCProc.communicate(cmd)
-    if len(err) > 0:
-      OsResp += '\nERR:' + err
+    OsResp, Error = OsProc.communicate(cmd)
+    if len(Error) > 0:
+      OsResp += '\nERR:' + Error
   else:
-    OCProc.stdin.write(cmd)
-    OCProc.stdin.flush()
-  return OCProc.returncode
+    OsProc.stdin.write(cmd)
+    OsProc.stdin.flush()
+  Ret = OsProc.returncode
+  return Ret
 
 def OsList(showerrors):
   for l in OsResp.split('\n'):
