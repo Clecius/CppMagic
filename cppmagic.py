@@ -11,7 +11,7 @@
 
 # pylint: disable=E1101
 
-VERSION = '0.9.1'
+VERSION = '0.9.2'
 
 import platform
 import os
@@ -1140,7 +1140,7 @@ if __name__ == '__main__':
         VsTask = {'version': '2.0.0', 'tasks': []}
       def AddTsk(label, args, prob = [], group = False):
         RemoveDict(VsTask['tasks'], 'label', label)
-        T = {'type': 'shell', 'command': 'python', 'label': label,
+        T = {'type': 'shell', 'command': 'python3', 'label': label,
              'presentation': {'echo': True, 'reveal': 'always', 'focus': True, 'panel': 'shared'},
              'problemMatcher': prob,
              'args': [CppMagic]}
