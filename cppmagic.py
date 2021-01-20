@@ -11,7 +11,7 @@
 
 # pylint: disable=E1101
 
-VERSION = '0.9.2'
+VERSION = '0.9.3'
 
 import platform
 import os
@@ -86,6 +86,7 @@ COMPILE = 'compile'
 LINK = 'link'
 AR = 'ar'
 RANLIB = 'ranlib'
+MODULES = 'modules'
 
 MSVC_CFG = 'msvc.json'
 MSVC_RUN = 'msvc.bat'
@@ -152,7 +153,7 @@ def OsCmd(cmd, wait = True):
   if wait:
     OsResp, Error = OsProc.communicate(cmd)
     if len(Error) > 0:
-      OsResp += '\nERR:' + Error
+      OsResp += '\n' + Error
   else:
     OsProc.stdin.write(cmd)
     OsProc.stdin.flush()
@@ -648,18 +649,19 @@ def DefaultProject():
       JVAR: {'WinSDKVersion': '10.0',
              'ExampleVar': '${ProjectDir}source/platform/example'},
       PROJECT_NAME: os.path.basename(os.getcwd()),
+      INTELLISENSE: {'cStandard': 'c11', 'cppStandard': 'c++17' },
       COMMON: {
         PREPROC: ['USE_IN_ALL_PLATFORMS']
       },
-      INCLUDE: ['${ProjectDir}include',
-                '${ProjectDir}source'],
+      INCLUDE: ['${ProjectDir}source',
+                '${ProjectDir}include'],
       SOURCE: {
         'c': ['${ProjectDir}source/c_code.c'],
         'cpp': ['${ProjectDir}source/main.cpp']
       },
       RUN: {CWD:'${ProjectDir}build/run', ARGS:['-p', 'parameter']},
       OUT_DIR: '${ProjectDir}build/${Mode}-${System}/${Platform}/${Configuration}',
-      INT_DIR: '${OutDir}intermediate',
+      INT_DIR: '${OutDir}intermediate/${ProjectName}',
       TMP_DIR: '${ProjectDir}temp/${Mode}',
       LIB_DIR: ['${ProjectDir}library/${Mode}-${System}/${Platform}/${Configuration}']
     }
@@ -1301,17 +1303,19 @@ if __name__ == '__main__':
         print (Fore.MAGENTA + 'Cleaning...')
         tmrCounter = timer()
         Count = 0
-        CleanFilter = []
+        CleanMain = []
         if CData.get(CLEAN, {}):
-          CleanFilter = CData[CLEAN]
-        if len(CleanFilter) == 0:
-          CleanFilter.append('*.*')
-        CleanFilter.append(os.path.basename(OutFile))
-        for e in CleanFilter:
-          for r, d, f in os.walk(OutDir):
-            for n in fnmatch.filter(f, e):
-              Count += 1
-              os.remove(os.path.join(r, n))
+          CleanMain = CData[CLEAN]
+        CleanMain.append(os.path.basename(OutFile))
+        for r, d, f in os.walk(IntDir):
+          for n in fnmatch.filter(f, '*.*'):
+            Count += 1
+            os.remove(os.path.join(r, n))
+        f = os.listdir(OutDir)
+        for e in CleanMain:
+          for n in fnmatch.filter(f, e):
+            Count += 1
+            os.remove(os.path.join(OutDir, n))
         print (Fore.YELLOW + '{0} files deleted.'.format(Count))
         print ('(Elapsed {:.1f}s)'.format(timer() - tmrCounter))
         Ret = 0
@@ -1490,12 +1494,22 @@ if __name__ == '__main__':
               with open(FLink, 'w') as GccPar:
                 # Build static library
                 if CData.get(COMMON, {}) and (AR in CData[COMMON]):
+                  print ('Modules will be archived (static lib):')
                   StaticLib = True
-                  for v in CData[COMMON].get(AR, []):
-                    GccPar.write('{0} '.format(v.strip()))
+                  Arch = CData[COMMON].get(AR, {})
+                  if (ARGS in Arch):
+                    for v in Arch.get(ARGS, []):
+                      GccPar.write('{0} '.format(v.strip()))
                   GccPar.write('{0} '.format(OutFile))
-                  for o in ObjLink:
-                    GccPar.write('{0} '.format(o))
+                  if (MODULES in Arch):
+                    for m in Arch.get(MODULES, []):
+                      if (not m.endswith(".o")):
+                        m += ".o"
+                      m = os.path.join(IntDir, m)
+                      GccPar.write('{0} '.format(m))
+                  else:
+                    for o in ObjLink:
+                      GccPar.write('{0} '.format(o))
                 else:
                   # Link parameters
                   if CData.get(COMMON, {}):
