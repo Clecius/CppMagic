@@ -11,7 +11,7 @@
 
 # pylint: disable=E1101
 
-VERSION = '0.9.3'
+VERSION = '0.9.4'
 
 import platform
 import os
@@ -87,6 +87,7 @@ LINK = 'link'
 AR = 'ar'
 RANLIB = 'ranlib'
 MODULES = 'modules'
+PKGCONF = 'pkg-config'
 
 MSVC_CFG = 'msvc.json'
 MSVC_RUN = 'msvc.bat'
@@ -133,9 +134,15 @@ build
 temp"""
 
 OsResp = ''
+OsOut = ''
+OsError = ''
 def OsCmd(cmd, wait = True):
   global OsResp
+  global OsOut
+  global OsError
   OsResp = ''
+  OsOut = ''
+  OsError = ''
   Posix = 'posix' in sys.builtin_module_names
   Shell = ''
   if Posix:
@@ -151,9 +158,11 @@ def OsCmd(cmd, wait = True):
   stderr=PIPE,
   stdin=PIPE)
   if wait:
-    OsResp, Error = OsProc.communicate(cmd)
-    if len(Error) > 0:
-      OsResp += '\n' + Error
+    OsOut, OsError = OsProc.communicate(cmd)
+    if len(OsError) > 0:
+      OsResp = OsOut + '\n' + OsError
+    else:
+      OsResp = OsOut
   else:
     OsProc.stdin.write(cmd)
     OsProc.stdin.flush()
@@ -360,6 +369,9 @@ def GCCDiscover():
   Cmd = which('ranlib')
   if Cmd:
     RPath[RANLIB] = Cmd
+  Cmd = which(PKGCONF)
+  if Cmd:
+    RPath[PKGCONF] = Cmd
   return RPath
 
 def ClangDiscover():
@@ -529,22 +541,22 @@ def ListHeader(data, source, ccpp, object):
     Cmd = '"{0}" -c -MM {1} {2} {3}\n'.format(BCmd, Ppd, Inc, source)
     OsCmd(Cmd)
     S = 0
-    if len(OsResp) > 0:
+    if len(OsOut) > 0:
       while True:
-        S = OsResp.find(' /', S)
+        S = OsOut.find(' /', S)
         if S >= 0:
           E = S
           while True:
-            E = OsResp.find(' ', E + 1)
+            E = OsOut.find(' ', E + 1)
             if E >= 0:
-              if OsResp[E-1] != '\\':
-                f = OsResp[S+1:E]
+              if OsOut[E-1] != '\\':
+                f = OsOut[S+1:E]
                 if not f.endswith(os.path.basename(source)):
                   Ret.append(f)
                 S = E
                 break
             else:
-              f = OsResp[S+1:].rstrip()
+              f = OsOut[S+1:].rstrip()
               if not f.endswith(os.path.basename(source)):
                 Ret.append(f)
               S = E
@@ -643,6 +655,41 @@ def ListSource(data, rebuild, lstcomp, lstlink):
   JHdr[Platform][Configuration].update({INCLUDE: JInc})
   with open(HdrFile, 'w') as Hdr:
     json.dump(JHdr, Hdr, indent=2)
+
+def PkgConfig(data):
+  PkgCfg = {'Pre':[],'Inc':[],'Bld':[],'Lpt':[],'Lib':[],'Lnk':[]}
+  if data.get(PKGCONF, []):
+    Cmd = FixSlash(data[TOOL_DIR].get(PKGCONF, ''))
+    if os.path.exists(Cmd):
+      Ok = 1
+      MList = ''
+      for m in data[PKGCONF]:
+        if OsCmd('"{0}" --exists {1}'.format(Cmd, m)) != 0:
+          print (Back.YELLOW + ' ' + Fore.YELLOW + Back.RESET + ' ' + PKGCONF + ' module [' + m + '] not exist! ' + Back.YELLOW + ' ')
+          Ok = 0
+          break
+        else:
+          MList += m + ' '
+      if Ok == 1:
+        if OsCmd('"{0}" --cflags {1}'.format(Cmd, MList)) == 0:
+          for o in OsResp.split(' '):
+            if o.startswith('-D'):
+              PkgCfg['Pre'].append(o[2:]) # Preprocessors
+            elif o.startswith('-I'):
+              PkgCfg['Inc'].append(o[2:]) # Include path
+            else:
+              PkgCfg['Bld'].append(o) # Build option
+        if OsCmd('"{0}" --libs {1}'.format(Cmd, MList)) == 0:
+          for o in OsResp.split(' '):
+            if o.startswith('-L'):
+              PkgCfg['Lpt'].append(o[2:]) # Library path
+            elif o.startswith('-l'):
+              PkgCfg['Lib'].append(o[2:]) # Libraries
+            else:
+              PkgCfg['Lnk'].append(o) # Link options
+    else:
+      print (Back.YELLOW + ' ' + Fore.YELLOW + Back.RESET + ' No ' + PKGCONF + ' found! ' + Back.YELLOW + ' ')
+  return PkgCfg
 
 def DefaultProject():
   PDat = {
@@ -1069,6 +1116,10 @@ if __name__ == '__main__':
       for k, v in MLst.items():
         if os.path.exists(v):
           MDat = LoadConfig(v)
+
+          if platform.system().lower() == 'linux':
+            PkgCfg = PkgConfig(MDat)
+
           if MDat.get(TOOL_DIR, {}):
             Inte = MDat.get(INTELLISENSE, {})
             IPath = []
@@ -1076,6 +1127,9 @@ if __name__ == '__main__':
               for i in MDat[INCLUDE]:
                 P = FixSlash(MacroResolve(i))
                 IPath.append(P)
+            if PkgCfg['Inc']:
+              for v in PkgCfg['Inc']:
+                IPath.append(v)
             if not Inte.get('includePath', {}):
               Inte['includePath'] = IPath
             else:
@@ -1084,6 +1138,9 @@ if __name__ == '__main__':
             if MDat.get(COMMON, {}):
               if MDat[COMMON].get(PREPROC, {}):
                 PProc = MDat[COMMON][PREPROC]
+            if PkgCfg['Pre']:
+              for v in PkgCfg['Pre']:
+                PProc.append(v)
             IMode = k
             IName = 'C++ {0} {1}'.format(k.upper(), platform.system().upper())
             if MDat.get(X64, {}):
@@ -1257,7 +1314,11 @@ if __name__ == '__main__':
     if not Configuration:
       print(Fore.YELLOW + 'Inform a configuration! (-c option)')
       exit(1)
+
     CData = MakeEnv(CheckConfig(False))
+    with open(FixSlash(os.path.join(TmpDir, 'config.json')), 'w') as JAll:
+      json.dump(CData, JAll)
+
     Rebuild = (Command == CMD_REBUILD)
     Fcompile = ""
     Fcompile2 = ""
@@ -1452,6 +1513,7 @@ if __name__ == '__main__':
             os.chdir(IntDir)
             ListSource(CData, Rebuild, SrcCompile, ObjLink)
             os.chdir(TmpDir)
+            PkgCfg = PkgConfig(CData)
 
             if SrcCompile:
               def MkCmd(file, source, compiler):
@@ -1470,12 +1532,21 @@ if __name__ == '__main__':
                         GccPar.write('{0} '.format(MacroResolve(v.strip())))
                       for v in CData[Platform][Configuration][COMPILE].get(compiler, {}):
                         GccPar.write('{0} '.format(MacroResolve(v.strip())))
+                  if PkgCfg['Bld']:
+                    for v in PkgCfg['Bld']:
+                      GccPar.write('{0} '.format(v))
                   # Preprocessor Definitions
                   for v in BuildDef:
                     GccPar.write('-D"{0}" '.format(v.strip()))
+                  if PkgCfg['Pre']:
+                    for v in PkgCfg['Pre']:
+                      GccPar.write('-D{0} '.format(v))
                   # Includes
                   for v in BuildInc:
                     GccPar.write('-I"{0}" '.format(v.strip()))
+                  if PkgCfg['Inc']:
+                    for v in PkgCfg['Inc']:
+                      GccPar.write('-I{0} '.format(v))
                   # Source Files
                   for s in source:
                     GccPar.write('{0} '.format(s))
@@ -1518,10 +1589,16 @@ if __name__ == '__main__':
                   if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}):
                     for v in CData[Platform][Configuration].get(LINK, {}):
                       GccPar.write('{0} '.format(MacroResolve(v.strip())))
+                  if PkgCfg['Lnk']:
+                    for v in PkgCfg['Lnk']:
+                      GccPar.write('{0} '.format(v))
                   # Library Path
                   if CData.get(LIB_DIR, {}):
                     for v in CData[LIB_DIR]:
                       GccPar.write('-L{0} '.format(FixSlash(MacroResolve(v.strip()))))
+                  if PkgCfg['Lpt']:
+                    for v in PkgCfg['Lpt']:
+                      GccPar.write('-L{0} '.format(v))
                   # Object Files
                   for o in ObjLink:
                     GccPar.write('{0} '.format(o))
@@ -1529,6 +1606,9 @@ if __name__ == '__main__':
                   if CData.get(LIB, {}):
                     for v in CData[LIB]:
                       GccPar.write('-l{0} '.format(MacroResolve(v.strip())))
+                  if PkgCfg['Lib']:
+                    for v in PkgCfg['Lib']:
+                      GccPar.write('-l{0} '.format(v))
 
             if os.path.exists(Fcompile) or os.path.exists(Fcompile2) or os.path.exists(FLink):
               print ('(Elapsed {:.1f}s)'.format(timer() - tmrCounter))
