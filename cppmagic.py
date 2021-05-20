@@ -2,7 +2,7 @@
 # coding=utf-8
 
 #+-------
-#| CppMagic - Deoclecio Freire 2019
+#| CppMagic - Deoclecio Freire 2019-2021
 #|
 #| A Python 3 script to help build C/C++ project cross-platform using whatever desired simple editor.
 #|
@@ -11,7 +11,7 @@
 
 # pylint: disable=E1101
 
-VERSION = '0.9.4'
+VERSION = '0.9.7'
 
 import platform
 import os
@@ -84,6 +84,7 @@ RELEASE = 'release'
 PREPROC = 'preprocessor'
 COMPILE = 'compile'
 LINK = 'link'
+GENLIB = 'genlib'
 AR = 'ar'
 RANLIB = 'ranlib'
 MODULES = 'modules'
@@ -170,16 +171,49 @@ def OsCmd(cmd, wait = True):
   return Ret
 
 def OsList(showerrors):
+  EWN = 0
+  Sqg = -1
   for l in OsResp.split('\n'):
     if (showerrors):
-      if 'error' in l.lower():
-        print (Fore.RED + l)
-      elif 'warning' in l.lower():
-        print (Fore.YELLOW + l)
-      elif 'note' in l.lower():
-        print (Fore.CYAN + l)
+      Normal = True
+      if Mode == MODE_MSVC:
+        for x in [[': fatal', 3, Fore.MAGENTA], [': error', 1, Fore.RED], [': warning', 2, Fore.YELLOW], [': note', 3, Fore.CYAN]]:
+          W = l.lower().find(x[0])
+          if (W > -1):
+            S1 = l.find(':', W +1)
+            Normal = False
+            print(l[:W + 1], end='')
+            print(x[2] + l[W + 1:S1 + 1].upper(), end='')
+            print(Fore.RESET + l[S1 + 1:])
       else:
-        print (l)
+        for x in [[' error: ', 1, Fore.RED], [' warning: ', 2, Fore.YELLOW], [' note: ', 3, Fore.CYAN]]:
+          W = l.lower().find(x[0])
+          if (W > -1):
+            S1 = l.find(':', 0, W)
+            S2 = -1
+            if (S1 > -1):
+              S2 = l.find(':', S1 + 1, W)
+              if (S2 > -1):
+                EWN = x[1]
+                Normal = False
+                Sqg = 3
+                print(l[:W], end='')
+                print(x[2] + x[0].upper(), end='')
+                print(Fore.RESET + l[W + len(x[0]):])
+                break
+        if Sqg > -1:
+          Sqg -= 1
+          if (Sqg == 0):
+            if (l.strip()[:1] == '^') or (l.strip()[:1] == '~'):
+              Normal = False
+              if EWN == 1:
+                print(Fore.RED + l)
+              elif EWN == 2:
+                print(Fore.YELLOW + l)
+              elif EWN == 3:
+                print(Fore.CYAN + l)
+      if Normal:
+        print(l)
     else:
       print (l)
 
@@ -1002,7 +1036,7 @@ if __name__ == '__main__':
   if not _check_modules():
     exit(1)
 
-  print (Fore.YELLOW + '\nCppMagic - v' + VERSION + Fore.RESET + ' by Deoclecio Freire 2019')
+  print (Fore.YELLOW + '\nCppMagic - v' + VERSION + Fore.RESET + ' by Deoclecio Freire 2019 - 2021')
 
   parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
                                    epilog=choicesDescriptions())
@@ -1391,12 +1425,13 @@ if __name__ == '__main__':
         if platform.system() == 'Windows':
           if len(CData[TOOL_DIR]) > 0:
             BTool = Host + '_' + Platform
-            BuildCmd = [''] * 3
+            BuildCmd = [''] * 4
             BuildCmd[0] = FixSlash(CData[TOOL_DIR].get(BTool + '-bat', ''), False)
             BuildCmd[1] = FixSlash(CData[TOOL_DIR].get(BTool + '-exe', ''), False)
             BuildCmd[2] = FixSlash(os.path.join(os.path.dirname(BuildCmd[1]), 'link.exe'), False)
+            BuildCmd[3] = FixSlash(os.path.join(os.path.dirname(BuildCmd[1]), 'lib.exe'), False)
             if os.path.exists(BuildCmd[0]) and os.path.exists(BuildCmd[1]) and os.path.exists(BuildCmd[2]):
-              print (Fore.MAGENTA + 'Preparing...')
+              print (Fore.MAGENTA + 'CppMagic is preparing the arguments...')
               tmrCounter = timer()
               SDKVer = MacroResolve('${var:WinSDKVersion}')
               if SDKVer.find('{') >= 0:
@@ -1417,6 +1452,19 @@ if __name__ == '__main__':
               ListSource(CData, Rebuild, SrcCompile, ObjLink)
               os.chdir(TmpDir)
               RSlash = False
+
+              StaticLib = False
+              if CData.get(COMMON, {}) and (GENLIB in CData[COMMON]):
+                StaticLib = True
+              if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}) and (GENLIB in CData[Platform][Configuration]):
+                StaticLib = True
+              if StaticLib:
+                if (not OutFile.lower().endswith('.lib')):
+                  OutFile += '.lib'
+              else:
+                if (not OutFile.lower().endswith('.exe')):
+                  OutFile += '.exe'
+
               if SrcCompile:
                 with open(Fcompile, 'w') as MsPar:
                   MsPar.write('/c ') # Only compile
@@ -1452,13 +1500,31 @@ if __name__ == '__main__':
                   if CData.get(LIB_DIR, {}):
                     for v in CData[LIB_DIR]:
                       MsPar.write('/LIBPATH:"{0}" '.format(FixSlash(MacroResolve(v.strip()))))
-                  # Library Files
-                  if CData.get(LIB, {}):
-                    for v in CData[LIB]:
-                      MsPar.write('"{0}" '.format(MacroResolve(v.strip())))
+                  CustomMods = False
+                  if StaticLib:
+                    if CData.get(COMMON, {}) and (GENLIB in CData[COMMON]):
+                      CustomMods = True
+                      for v in CData[COMMON].get(GENLIB, {}):
+                        if (not v.lower().endswith(".obj")):
+                          v += ".obj"
+                        v = os.path.join(IntDir, v)
+                        MsPar.write('"{0}" '.format(MacroResolve(v.strip())))
+                    if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}) and (GENLIB in CData[Platform][Configuration]):
+                      CustomMods = True
+                      for v in CData[Platform][Configuration].get(GENLIB, {}):
+                        if (not v.lower().endswith(".obj")):
+                          v += ".obj"
+                        v = os.path.join(IntDir, v)
+                        MsPar.write('"{0}" '.format(MacroResolve(v.strip())))
+                  else:
+                    # Library Files
+                    if CData.get(LIB, {}):
+                      for v in CData[LIB]:
+                        MsPar.write('"{0}" '.format(MacroResolve(v.strip())))
                   # Object Files
-                  for o in ObjLink:
-                    MsPar.write('"{0}" '.format(o))
+                  if not CustomMods:
+                    for o in ObjLink:
+                      MsPar.write('"{0}" '.format(o))
 
               if os.path.exists(Fcompile) or os.path.exists(FLink):
                 print ('(Elapsed {:.1f}s)'.format(timer() - tmrCounter))
@@ -1466,10 +1532,17 @@ if __name__ == '__main__':
                 tmrCounter = timer()
                 Ok = 0
                 if os.path.exists(Fcompile):
+                  print (Fore.YELLOW + 'MSVC is compiling sources...')
                   Ok = OsCmd('"' + BuildCmd[1] + '" @' + Fcompile + ' & exit\n')
                   OsList(True)
                 if Ok == 0:
-                  Ok = OsCmd('"' + BuildCmd[2] + '" @' + FLink + ' & exit\n')
+                  LinkType = 2
+                  if StaticLib:
+                    LinkType = 3
+                    print (Fore.YELLOW + 'MSVC is linking the library...')
+                  else:
+                    print (Fore.YELLOW + 'MSVC is linking the executable...')
+                  Ok = OsCmd('"' + BuildCmd[LinkType] + '" @' + FLink + ' & exit\n')
                   OsList(True)
                 if Ok > 0:
                   print (Back.RED + ' ' + Fore.RED + Back.RESET + ' Build error! ' + Fore.RESET + '(Elapsed {:.1f}s)'.format(timer() - tmrCounter))
@@ -1561,24 +1634,47 @@ if __name__ == '__main__':
                 MkCmd(Fcompile2, GPPFiles, GPP)
 
             StaticLib = False
+            if CData.get(COMMON, {}) and (GENLIB in CData[COMMON]):
+              StaticLib = True
+            if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}) and (GENLIB in CData[Platform][Configuration]):
+              StaticLib = True
+            if StaticLib:
+              if (not OutFile.lower().endswith('.a')):
+                  OutFile += '.a'
+              Of = os.path.basename(OutFile)
+              Op = os.path.dirname(OutFile)
+              if (Of.lower()[:3] != 'lib'):
+                  Of = 'lib' + Of
+              OutFile = os.path.join(Op, Of)
+
             if SrcCompile or (not os.path.exists(OutFile)):
               with open(FLink, 'w') as GccPar:
                 # Build static library
-                if CData.get(COMMON, {}) and (AR in CData[COMMON]):
+                if StaticLib:
                   print ('Modules will be archived (static lib):')
-                  StaticLib = True
-                  Arch = CData[COMMON].get(AR, {})
-                  if (ARGS in Arch):
-                    for v in Arch.get(ARGS, []):
+                  if (CData.get(COMMON, {}) and (AR in CData[COMMON])):
+                    for v in CData[COMMON].get(AR, []):
+                      GccPar.write('{0} '.format(v.strip()))
+                  if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}) and (AR in CData[Platform][Configuration]):
+                    for v in CData[Platform][Configuration].get(AR, []):
                       GccPar.write('{0} '.format(v.strip()))
                   GccPar.write('{0} '.format(OutFile))
-                  if (MODULES in Arch):
-                    for m in Arch.get(MODULES, []):
+                  CustomMods = False
+                  if (CData.get(COMMON, {}) and (GENLIB in CData[COMMON])):
+                    CustomMods = True
+                    for m in CData[COMMON].get(GENLIB, []):
                       if (not m.endswith(".o")):
                         m += ".o"
                       m = os.path.join(IntDir, m)
                       GccPar.write('{0} '.format(m))
-                  else:
+                  if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}) and (GENLIB in CData[Platform][Configuration]):
+                    CustomMods = True
+                    for m in CData[Platform][Configuration].get(GENLIB, []):
+                      if (not m.endswith(".o")):
+                        m += ".o"
+                      m = os.path.join(IntDir, m)
+                      GccPar.write('{0} '.format(m))
+                  if not CustomMods:
                     for o in ObjLink:
                       GccPar.write('{0} '.format(o))
                 else:
@@ -1616,6 +1712,7 @@ if __name__ == '__main__':
               tmrCounter = timer()
               os.chdir(IntDir)
               Ok = 0
+              print (Fore.YELLOW + 'GCC is compiling sources...')
               if os.path.exists(Fcompile):
                 Ok = OsCmd('"{0}" @{1}'.format(BuildCmd[0], Fcompile))
                 OsList(True)
@@ -1624,6 +1721,7 @@ if __name__ == '__main__':
                 OsList(True)
               if os.path.exists(FLink) and (Ok == 0):
                 if StaticLib:
+                  print (Fore.YELLOW + 'GCC is linking the library...')
                   if len(BuildCmd[2]) > 1:
                     Ok = OsCmd('"{0}" @"{1}"'.format(BuildCmd[2], FLink))
                     OsList(True)
@@ -1640,6 +1738,7 @@ if __name__ == '__main__':
                     print (Fore.YELLOW + 'No AR command found to link statically!')
                     Ok =1
                 else:
+                  print (Fore.YELLOW + 'GCC is linking the binary application...')
                   Ok = OsCmd('"{0}" @"{1}"'.format(BuildCmd[1], FLink))
                   OsList(True)
               if Ok > 0:
