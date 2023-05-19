@@ -11,7 +11,7 @@
 
 # pylint: disable=E1101
 
-VERSION = '0.9.991'
+VERSION = '0.9.993'
 
 import platform
 import os
@@ -27,13 +27,16 @@ if clrma:
 import json
 import fnmatch
 import glob
+import http.server
+import socketserver
+import webbrowser
 from subprocess import PIPE, Popen
 from threading import Thread
 from timeit import default_timer as timer
 
 # === Magic Behavior ===
 RSlash = True # Use right slash in Windows
-VscGen = ['x64', 'x86', 'arm'] # Platforms to gerenerate Visual Studio Code Tasks and Launchers
+VscGen = ['x64', 'x86', 'arm', 'wasm'] # Platforms to gerenerate Visual Studio Code Tasks and Launchers
 ConfigBak = False
 # ===
 
@@ -47,11 +50,13 @@ CMD_REBUILD = 'rebuild'
 CMD_CLEAN = 'clean'
 CMD_PREPARE = 'prepare'
 CMD_DISCOVER = 'discover'
+CMD_HOST = 'host'
 
 MODE_ALL = 'all'
 MODE_MSVC = 'msvc'
 MODE_GCC = 'gcc'
 MODE_CLANG = 'clang'
+MODE_EMCC = 'emcc'
 
 ENV_SIMPLE = 'simple'
 ENV_VSCODE = 'vscode'
@@ -62,6 +67,11 @@ SOURCE = 'source'
 CLEAN = 'clean'
 OUT_DIR = 'out_dir'
 OUT_FILE = 'out_file'
+SHELL_FILE = 'shell_file'
+SETTINGS = 'settings'
+LSETTINGS = 'link_settings'
+EMBED_FILE = 'embed_file'
+PRELOAD_FILE = 'preload-file'
 INT_DIR = 'int_dir'
 TMP_DIR = 'tmp_dir'
 LIB_DIR = 'lib_dir'
@@ -82,10 +92,15 @@ GCC = 'gcc'
 GPP = 'gpp'
 LCC = 'clang'
 LPP = 'clangpp'
+ECC = 'emcc'
+EPP = 'em++'
+EAR = 'emar'
+ERANLIB = 'emranlib'
 X86 = 'x86'
 X64 = 'x64'
 ARM = 'arm'
 ARM64 = 'arm64'
+WASM = 'wasm'
 DEBUG = 'debug'
 RELEASE = 'release'
 PREPROC = 'preprocessor'
@@ -114,6 +129,12 @@ CLANG_LCC = 'clang-lcc.par'
 CLANG_LPP = 'clang-lpp.par'
 CLANG_LNK = 'clang-lnk.par'
 CLANG_HDR = 'clang-header.json'
+
+EMCC_CFG = 'emcc.json'
+EMCC_LCC = 'emcc-lcc.par'
+EMCC_LPP = 'emcc-lpp.par'
+EMCC_LNK = 'emcc-lnk.par'
+EMCC_HDR = 'emcc-header.json'
 
 BuildCmd = []
 BuildDef = []
@@ -152,6 +173,57 @@ temp"""
 OsResp = ''
 OsOut = ''
 OsError = ''
+
+def DumpMessages():
+  global DumpMsgLst
+  CMgLst = DumpMsgLst[DML_CMg]
+  if len(CMgLst) > 0:
+    print(Fore.MAGENTA + "CppMagic messages:" + Fore.RESET)
+    for e in CMgLst:
+      print(e)
+    print(Fore.RESET)
+  ErrLst = DumpMsgLst[DML_Err]
+  if len(ErrLst) > 0:
+    print(Fore.RED + "Errors list:" + Fore.RESET)
+    for e in ErrLst:
+      print(e)
+    print(Fore.RESET)
+
+def FixSlash(value, force = None):
+  V = os.path.normpath(value)
+  slash = RSlash
+  if force != None:
+    slash = force
+  if slash:
+    V = V.replace('\\', '/')
+  else:
+    V = V.replace('/', '\\')
+  if platform.system() == 'Windows' and (V[1] == ':'):
+    # Life obligation: Work around to fix other's bullshit.
+    # Capital drive letter on windows.
+    V = '{0}{1}'.format(V[0].upper(),V[1:])
+  return V
+
+def FullMergeDict(D1, D2):
+  for key, value in D1.items():
+    if key in D2:
+      if type(value) is dict:
+        FullMergeDict(D1[key], D2[key])
+      else:
+        if type(value) in (int, float, str):
+          D1[key] = [value]
+        if type(D2[key]) is list:
+          D1[key].extend(D2[key])
+        else:
+          D1[key].append(D2[key])
+  for key, value in D2.items():
+    if key not in D1:
+      D1[key] = value
+
+def Mkd(value):
+  if value and (not os.path.exists(value)):
+    os.makedirs(value)
+  return value
 
 def OsCmd(cmd, wait = True):
   global OsResp
@@ -230,77 +302,43 @@ def OsList(showerrors):
     else:
       print (l)
 
-def DumpMessages():
-  global DumpMsgLst
-  CMgLst = DumpMsgLst[DML_CMg]
-  if len(CMgLst) > 0:
-    print(Fore.MAGENTA + "CppMagic messages:" + Fore.RESET)
-    for e in CMgLst:
-      print(e)
-    print(Fore.RESET)
-  ErrLst = DumpMsgLst[DML_Err]
-  if len(ErrLst) > 0:
-    print(Fore.RED + "Errors list:" + Fore.RESET)
-    for e in ErrLst:
-      print(e)
-    print(Fore.RESET)
+def RemoveDict(dlist, dprop, dvalue):
+  Found = True
+  while Found:
+    Count = 0
+    Found = False
+    for Conf in dlist:
+      PValue = Conf.get(dprop, '-novalue-')
+      if PValue == dvalue:
+        Found = True
+        break
+      Count += 1
+    if Found:
+      del dlist[Count]
 
-def choicesDescriptions():
-  R = Fore.RESET
-  M = Fore.MAGENTA
-  Y = Fore.YELLOW
-  G = Fore.GREEN
-  C = Fore.CYAN
-  CppMagic = os.path.basename(sys.argv[0])
-
-  Desc = M + "Commands:\n"
-  Desc += Y + '  build' + R + ' ...: Generate C++ binaries.\n'
-  Desc += Y + '  rebuild' + R + ' .: Generate C++ binaries compiling entire project.\n'
-  Desc += Y + '  clean' + R + ' ...: Erase C++ binaries.\n'
-  Desc += Y + '  discover' + R + ' : Try to locate C++ compilers available.\n'
-  Desc += Y + '  prepare' + R + ' .: Prepare environments.\n'
-
-  Desc += M + "\nOptions:\n"
-  Desc += R + '  -m MODE ........: ' + G + 'Set compiler to use. (clang, gcc or msvc)\n'
-  Desc += R + '  -p PLATFORM ....: ' + G + 'Set platfomr to use. (arm, arm64, x64 or x86)\n'
-  Desc += R + '  -c CONFIG ......: ' + G + 'Set configuration. (debug or release)\n'
-  Desc += R + '  -e ENVIRONMENT .: ' + G + 'Set environment to prepare. (simple or vscode)\n'
-  Desc += G + '                    simple' + R + '   - Prepare a simple C++ project structure.\n'
-  Desc += G + '                    vscode' + R + '   - Prepare Json files for Visual Studio Code.\n'
-  Desc += R + '  -r Run .........: ' + G + 'Execute binary product of build on the end.\n'
-  Desc += G + '                      (uses "project.jsom" options)\n'
-  Desc += R + '  -d Directory ...: ' + G + 'Specify a project directory to work within.\n'
-  Desc += R + '  -j JsonFile ....: ' + G + 'Specify a project Json condiguration file.\n'
-  Desc += R + '  -p Directory ...: ' + G + 'Specify a directory to copy the output file.\n'
-
-  Desc += M + "\nExamples:\n"
-  Desc += R + '  ' + CppMagic + Y + ' prepare\n'
-  Desc += C + '    *' + R + 'Try to discover all available compilers;\n'
-  Desc += C + '    *' + R + 'Generate a basic C++ structure project;\n'
-  Desc += C + '    *' + R + 'Generate Visual Studio Code Json files in .vscode directory.\n'
-
-  Desc += R + '  ' + CppMagic + Y + ' prepare ' + R + '-e' + G + ' vscode\n'
-  Desc += C + '    *' + R + 'Create or update Json files for Visual Studio Code.\n'
-
-  Desc += R + '  ' + CppMagic + Y + ' build ' + R + '-m' + G + ' gcc ' + R + '-p' + G + ' x64 ' + R + '-c' + G + ' debug\n'
-  Desc += C + '    *' + R + 'Build project using GCC for X64 in Debug.\n'
-
-  return Desc
-
-def FixSlash(value, force = None):
-  V = os.path.normpath(value)
-  slash = RSlash
-  if force != None:
-    slash = force
-  if slash:
-    V = V.replace('\\', '/')
+def Splt(value, sep):
+  S = []
+  if ',' in value:
+    S = value.split(sep)
   else:
-    V = V.replace('/', '\\')
-  if platform.system() == 'Windows' and (V[1] == ':'):
-    # Life obligation: Work around to fix other's bullshit.
-    # Capital drive letter on windows.
-    V = '{0}{1}'.format(V[0].upper(),V[1:])
-  return V
+    S.append(value)
+  return S
+
+def versionvalue(version):
+  l = [int(x, 10) for x in version.split('.')]
+  l.reverse()
+  return sum(x * (100 ** i) for i, x in enumerate(l))
+
+def which(pgm):
+  path = os.getenv('PATH')
+  Bin = pgm
+  if platform.system() == 'Windows':
+    Bin = pgm + '.exe'
+  for p in path.split(os.path.pathsep):
+    x = os.path.join(p, Bin)
+    if os.path.exists(p) and os.access(x, os.X_OK):
+      return os.path.join(p, Bin)
+
 
 def LoadJson(file):
   with open(file) as J:
@@ -313,16 +351,6 @@ def LoadJson(file):
       if not p == 0:
         JText += t
   return json.loads(JText)
-
-def which(pgm):
-  path = os.getenv('PATH')
-  Bin = pgm
-  if platform.system() == 'Windows':
-    Bin = pgm + '.exe'
-  for p in path.split(os.path.pathsep):
-    x = os.path.join(p, Bin)
-    if os.path.exists(p) and os.access(x, os.X_OK):
-      return os.path.join(p, Bin)
 
 def MsvcDiscover():
   BinPath = {}
@@ -416,11 +444,6 @@ def MsvcDiscover():
     print (Fore.RED + 'No MSVC compiler found!')
   return BinPath
 
-def versionvalue(version):
-  l = [int(x, 10) for x in version.split('.')]
-  l.reverse()
-  return sum(x * (100 ** i) for i, x in enumerate(l))
-
 def GCCDiscover():
   BinPath = {}
   print (Fore.MAGENTA + 'Discovering GCC...')
@@ -461,34 +484,22 @@ def ClangDiscover():
     BinPath[PKGCONF] = Cmd
   return BinPath
 
-def Splt(value, sep):
-  S = []
-  if ',' in value:
-    S = value.split(sep)
-  else:
-    S.append(value)
-  return S
-
-def Mkd(value):
-  if value and (not os.path.exists(value)):
-    os.makedirs(value)
-  return value
-
-def FullMergeDict(D1, D2):
-  for key, value in D1.items():
-    if key in D2:
-      if type(value) is dict:
-        FullMergeDict(D1[key], D2[key])
-      else:
-        if type(value) in (int, float, str):
-          D1[key] = [value]
-        if type(D2[key]) is list:
-          D1[key].extend(D2[key])
-        else:
-          D1[key].append(D2[key])
-  for key, value in D2.items():
-    if key not in D1:
-      D1[key] = value
+def EmsdkDiscover():
+  BinPath = {}
+  print (Fore.MAGENTA + 'Discovering Emscripten...')
+  Cmd = which(EPP)
+  if Cmd:
+    BinPath[EPP] = Cmd
+  Cmd = which(ECC)
+  if Cmd:
+    BinPath[ECC] = Cmd
+  Cmd = which(EAR)
+  if Cmd:
+    BinPath[EAR] = Cmd
+  Cmd = which(ERANLIB)
+  if Cmd:
+    BinPath[ERANLIB] = Cmd
+  return BinPath
 
 def MacroResolve(data):
   Ret = data
@@ -667,9 +678,12 @@ def ListSource(data, rebuild, lstcomp, lstlink):
   elif Mode == MODE_GCC:
     ObjExt = '.o'
     HdrFile = GCC_HDR
-  else: # MODE_CLANG
+  elif Mode == MODE_CLANG:
     ObjExt = '.o'
     HdrFile = CLANG_HDR
+  elif Mode == MODE_EMCC:
+    ObjExt = '.o'
+    HdrFile = EMCC_HDR
   if data.get(SOURCE, {}):
     for v in data[SOURCE].get('c', []):
       Sg = glob.glob(FixSlash(MacroResolve(v.strip())))
@@ -837,9 +851,10 @@ def CheckConfig(force):
       with open(PFile, 'w') as Cfg:
         json.dump(TDat, Cfg, indent=2)
   FAll = {
-    MODE_MSVC: os.path.join(ConfigDir, MSVC_CFG),
+    MODE_CLANG: os.path.join(ConfigDir, CLANG_CFG),
+    MODE_EMCC: os.path.join(ConfigDir, EMCC_CFG),
     MODE_GCC: os.path.join(ConfigDir, GCC_CFG),
-    MODE_CLANG: os.path.join(ConfigDir, CLANG_CFG)
+    MODE_MSVC: os.path.join(ConfigDir, MSVC_CFG)
   }
   if not Mode == MODE_ALL:
     CFile = FAll[Mode]
@@ -1054,6 +1069,46 @@ def CheckConfig(force):
               }
             }
           }
+        elif k == MODE_EMCC:
+          TDat = {
+            TOOL_DIR: EmsdkDiscover(),
+            LIB: ['stdc++', 'pthread'],
+            CLEAN: ['*.js', '*.wasm', '*.data'],
+            OUT_FILE: '${OutDir}${ProjectName}.html',
+            SHELL_FILE: '${ProjectDir}source/shell.html',
+            PRELOAD_FILE: 'splash.png',
+            COMMON: {
+              PREPROC: [],
+              SETTINGS: {
+                COMMON: ['USE_GLFW=3'],
+                ECC: [],
+                EPP: []
+              },
+              COMPILE: {
+                COMMON: ['-Os', '-Wall'],
+                ECC: [],
+                EPP: []
+              },
+              LSETTINGS: ['ASYNCIFY'],
+              LINK: ['-o${outfile}']
+            },
+            WASM:{
+              DEBUG: {
+                PREPROC: ['DEBUG', '_DEBUG'],
+                COMPILE: {
+                  COMMON: ['-m64', '-O0', '-g3', '-ggdb3', '-gdwarf', '-gdwarf-4']
+                },
+                LINK: ['-m64']
+              },
+              RELEASE: {
+                PREPROC: ['DNDEBUG'],
+                COMPILE: {
+                  COMMON: ['-m64', '-O2']
+                },
+                LINK: ['-m64']
+              }
+            }
+          }
       else:
         if force:
           TDat = LoadJson(v)
@@ -1112,19 +1167,6 @@ def MakeEnv(cfile, skipmkd = False):
       Mkd(TmpDir)
   return TDat
 
-def RemoveDict(dlist, dprop, dvalue):
-  Found = True
-  while Found:
-    Count = 0
-    Found = False
-    for Conf in dlist:
-      PValue = Conf.get(dprop, '-novalue-')
-      if PValue == dvalue:
-        Found = True
-        break
-      Count += 1
-    if Found:
-      del dlist[Count]
 
 def _check_python_version():
   Ret = False
@@ -1143,6 +1185,52 @@ def _check_modules():
     print ("Colorama package needed.")
   return Ret
 
+def choicesDescriptions():
+  R = Fore.RESET
+  M = Fore.MAGENTA
+  Y = Fore.YELLOW
+  G = Fore.GREEN
+  C = Fore.CYAN
+  CppMagic = os.path.basename(sys.argv[0])
+
+  Desc = M + "Commands:\n"
+  Desc += Y + '  build' + R + ' ...: Generate C++ binaries.\n'
+  Desc += Y + '  rebuild' + R + ' .: Generate C++ binaries compiling entire project.\n'
+  Desc += Y + '  clean' + R + ' ...: Erase C++ binaries.\n'
+  Desc += Y + '  discover' + R + ' : Try to locate C++ compilers available.\n'
+  Desc += Y + '  prepare' + R + ' .: Prepare environments.\n'
+  Desc += Y + '  host' + R + ' ....: Host a webserver.\n'
+
+  Desc += M + "\nOptions:\n"
+  Desc += R + '  -m MODE ........: ' + G + 'Set compiler to use. (clang, emcc, gcc or msvc)\n'
+  Desc += R + '  -p PLATFORM ....: ' + G + 'Set platfomr to use. (arm, arm64, wasm, x64 or x86)\n'
+  Desc += R + '  -c CONFIG ......: ' + G + 'Set configuration. (debug or release)\n'
+  Desc += R + '  -e ENVIRONMENT .: ' + G + 'Set environment to prepare. (simple or vscode)\n'
+  Desc += G + '                    simple' + R + '   - Prepare a simple C++ project structure.\n'
+  Desc += G + '                    vscode' + R + '   - Prepare Json files for Visual Studio Code.\n'
+  Desc += R + '  -r Run .........: ' + G + 'Execute binary product of build on the end.\n'
+  Desc += G + '                      (uses "project.jsom" options)\n'
+  Desc += R + '  -d Directory ...: ' + G + 'Project directory to work within.\n'
+  Desc += R + '  -j JsonFile ....: ' + G + 'Project Json condiguration file.\n'
+  Desc += R + '  -p Directory ...: ' + G + 'Directory to copy the output file.\n'
+  Desc += R + '  -o Directory ...: ' + G + 'Directory to host in http server.\n'
+  Desc += R + '  -t Port ........: ' + G + 'Port to host in http server.\n'
+  Desc += R + '  -s File ........: ' + G + 'Start page file in host.\n'
+
+  Desc += M + "\nExamples:\n"
+  Desc += R + '  ' + CppMagic + Y + ' prepare\n'
+  Desc += C + '    *' + R + 'Try to discover all available compilers;\n'
+  Desc += C + '    *' + R + 'Generate a basic C++ structure project;\n'
+  Desc += C + '    *' + R + 'Generate Visual Studio Code Json files in .vscode directory.\n'
+
+  Desc += R + '  ' + CppMagic + Y + ' prepare ' + R + '-e' + G + ' vscode\n'
+  Desc += C + '    *' + R + 'Create or update Json files for Visual Studio Code.\n'
+
+  Desc += R + '  ' + CppMagic + Y + ' build ' + R + '-m' + G + ' gcc ' + R + '-p' + G + ' x64 ' + R + '-c' + G + ' debug\n'
+  Desc += C + '    *' + R + 'Build project using GCC for X64 in Debug.\n'
+
+  return Desc
+
 # =================================================================================================
 if __name__ == '__main__':
 
@@ -1156,13 +1244,13 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
                                    epilog=choicesDescriptions())
   parser.add_argument('command', action='store', type= lambda s: s.lower(),
-                      choices=[CMD_BUILD, CMD_REBUILD, CMD_CLEAN, CMD_PREPARE, CMD_DISCOVER],
+                      choices=[CMD_BUILD, CMD_REBUILD, CMD_CLEAN, CMD_PREPARE, CMD_DISCOVER, CMD_HOST],
                       help='See commands below.')
   parser.add_argument('-m', '--mode', type= lambda s: s.lower(),
-                      choices=[MODE_ALL, MODE_MSVC, MODE_GCC, MODE_CLANG],
+                      choices=[MODE_ALL, MODE_MSVC, MODE_GCC, MODE_CLANG, MODE_EMCC],
                       help='Compiler to use.')
   parser.add_argument('-p', '--platform', type= lambda s: s.lower(),
-                      choices=[ARM, ARM64, X64, X86],
+                      choices=[ARM, ARM64, X64, X86, WASM],
                       help='Building platform.')
   parser.add_argument('-c', '--config', type= lambda s: s.lower(),
                       choices=[DEBUG, RELEASE],
@@ -1173,11 +1261,19 @@ if __name__ == '__main__':
   parser.add_argument('-r', '--run', action='store_true', default=False,
                       help='Execute binary after build.')
   parser.add_argument('-d', '--directory', dest='prjdir',
-                      help='Specify a project directory to process.')
+                      help='Project directory to process.')
   parser.add_argument('-j', '--project', dest='prjjson',
-                      help='Specify a project configuration file (.json).')
+                      help='Project configuration file (.json).')
   parser.add_argument('-u', '--publish', dest='pubdir',
-                      help='Specify a directory to copy the out file.')
+                      help='Directory to copy the out file.')
+
+  parser.add_argument('-o', '--hostdir', dest='hostdir',
+                      help='Directory to host in http server.')
+  parser.add_argument('-t', '--port', dest='hostport',
+                      help='Port to host in http server.')
+  parser.add_argument('-s', '--startpage', dest='startpage',
+                      help='Start page file in host.')
+
   args = parser.parse_args()
 
   DumpMsgLst[DML_Err] = []
@@ -1232,10 +1328,17 @@ if __name__ == '__main__':
   if Host == 'amd64':
     Host = X64
 
+  if Mode == MODE_EMCC:
+    Platform = WASM
+  if Platform == WASM:
+    Mode = MODE_EMCC
+
   cfg = GCC_CFG.split('.')
   GCC_CFG = cfg[0] + "-" + platform.system().lower() + "." + cfg[1]
   cfg = CLANG_CFG.split('.')
   CLANG_CFG = cfg[0] + "-" + platform.system().lower() + "." + cfg[1]
+  cfg = EMCC_CFG.split('.')
+  EMCC_CFG = cfg[0] + "-" + WASM + "." + cfg[1]
 
   Ret = 1 # Error
   tmrProcess = timer()
@@ -1247,6 +1350,7 @@ if __name__ == '__main__':
     CheckConfig(True)
     print (Fore.GREEN + 'Done.')
     Ret = 0
+
   elif Command == CMD_PREPARE: # --== PREPARE ==--
     print (Fore.GREEN + 'Preparing...')
     if not Mode:
@@ -1259,6 +1363,7 @@ if __name__ == '__main__':
         Platform = X86
       else:
         Platform = ARM
+
     if not Configuration:
       Configuration = DEBUG
     MAll = {}
@@ -1268,10 +1373,9 @@ if __name__ == '__main__':
       MAll.update({MODE_GCC: FixSlash(os.path.join(ConfigDir, GCC_CFG))})
     if (Mode == MODE_ALL) or (Mode == MODE_CLANG):
       MAll.update({MODE_CLANG: FixSlash(os.path.join(ConfigDir, CLANG_CFG))})
+    if (Mode == MODE_ALL) or (Mode == MODE_EMCC):
+      MAll.update({MODE_EMCC: FixSlash(os.path.join(ConfigDir, EMCC_CFG))})
 
-    # {MODE_MSVC: FixSlash(os.path.join(ConfigDir, MSVC_CFG)),
-    #         MODE_GCC: FixSlash(os.path.join(ConfigDir, GCC_CFG)),
-    #         MODE_CLANG: FixSlash(os.path.join(ConfigDir, CLANG_CFG))}
     CppMagic = os.path.basename(sys.argv[0])
     Env = args.environment
     DefEnv = False
@@ -1369,6 +1473,15 @@ if __name__ == '__main__':
               elif MDat[X86].get(RELEASE, {}):
                 if MDat[X86][RELEASE].get(PREPROC, {}):
                   PProc.extend(MDat[X86][RELEASE][PREPROC])
+            elif MDat.get(WASM, {}):
+              IMode += '-' + WASM
+              IName += ' ' + WASM
+              if MDat[WASM].get(DEBUG, {}):
+                if MDat[WASM][DEBUG].get(PREPROC, {}):
+                  PProc.extend(MDat[WASM][DEBUG][PREPROC])
+              elif MDat[WASM].get(RELEASE, {}):
+                if MDat[WASM][RELEASE].get(PREPROC, {}):
+                  PProc.extend(MDat[WASM][RELEASE][PREPROC])
             else:
               IMode += '-' + X64
               IName += ' ' + X64
@@ -1455,6 +1568,10 @@ if __name__ == '__main__':
           for p in VscGen:
             Mode = m
             Platform = p
+            if Mode == MODE_EMCC:
+              Platform = WASM
+            if Platform == WASM:
+              Mode = MODE_EMCC
             for c in [DEBUG, RELEASE]:
               Configuration = c
               PrjJsonLoaded = False
@@ -1475,17 +1592,32 @@ if __name__ == '__main__':
                       for a in TArgs:
                         Args.append(MacroResolve(a))
                   NewL = MDat.get(LAUNCH, {})
-                  LName = 'Run' + Desc
+                  if m == MODE_EMCC:
+                    LName = 'Host' + Desc
+                  else:
+                    LName = 'Run' + Desc
                   NewL['name'] = LName
                   NewL['request'] = 'launch'
-                  NewL['program'] = OutFile
-                  NewL['cwd'] = Cwd
-                  NewL['args'] = Args
+
+                  if Mode == MODE_EMCC:
+                    NewL['program'] = which('cppmagic.py')
+                    WsCwd = os.path.dirname(OutFile)
+                    NewL['cwd'] = WsCwd
+                    WsArgs = ['host', '-o', WsCwd, '-t', '8080', '-s']
+                    WsArgs.append(os.path.basename(OutFile))
+                    NewL['args'] = WsArgs
+                  else:
+                    NewL['program'] = OutFile
+                    NewL['cwd'] = Cwd
+                    NewL['args'] = Args
+
                   NewL['preLaunchTask'] = 'Build' + PreDsc
                   if not NewL.get('type'):
                     if Mode == MODE_MSVC:
                       NewL['type'] = 'cppvsdbg'
                       NewL.update({'symbolSearchPath': OutDir})
+                    elif Mode == MODE_EMCC:
+                      NewL['type'] = 'python'
                     else:
                       NewL['type'] = 'cppdbg'
                   if not NewL.get('externalConsole'):
@@ -1517,9 +1649,13 @@ if __name__ == '__main__':
     if not Mode:
       print(Fore.YELLOW + 'Inform a compiler! (-m option)')
       exit(1)
+    if Mode == MODE_EMCC:
+      Platform = WASM
     if not Platform:
       print(Fore.YELLOW + 'Inform a platform! (-p option)')
       exit(1)
+    if Platform == WASM:
+      Mode = MODE_EMCC
     if not Configuration:
       print(Fore.YELLOW + 'Inform a configuration! (-c option)')
       exit(1)
@@ -1555,6 +1691,10 @@ if __name__ == '__main__':
         Fcompile = CLANG_LCC
         Fcompile2 = CLANG_LPP
         FLink = CLANG_LNK
+    elif Mode == MODE_EMCC:
+        Fcompile = EMCC_LCC
+        Fcompile2 = EMCC_LPP
+        FLink = EMCC_LNK
     Fcompile = FixSlash(os.path.join(TmpDir, Fcompile))
     Fcompile2 = FixSlash(os.path.join(TmpDir, Fcompile2))
     FLink = FixSlash(os.path.join(TmpDir, FLink))
@@ -2244,6 +2384,295 @@ if __name__ == '__main__':
             print (Fore.WHITE + Back.RED + 'Missing building tools!')
         else:
           print (Fore.WHITE + Back.RED + 'No Clang compiler found!')
+
+      #                     === EMCC ===
+      elif Mode == MODE_EMCC:
+        print (Fore.GREEN + '-= Emscripten Compiler Frontend =-')
+        #https://emscripten.org/docs/tools_reference/emcc.html
+        print (Fore.CYAN + '[' + Command + ' ' + Platform + ' ' + Configuration + ']')
+        if len(CData[TOOL_DIR]) > 0:
+          BuildCmd = [''] * 4
+          BuildCmd[0] = FixSlash(CData[TOOL_DIR].get(ECC, ''))
+          BuildCmd[1] = FixSlash(CData[TOOL_DIR].get(EPP, ''))
+          BuildCmd[2] = FixSlash(CData[TOOL_DIR].get(EAR, ''))
+          BuildCmd[3] = FixSlash(CData[TOOL_DIR].get(ERANLIB, ''))
+          if os.path.exists(BuildCmd[0]):
+            print (Fore.MAGENTA + 'CppMagic is preparing the arguments...')
+            tmrCounter = timer()
+
+            #Incremental build
+            SrcCompile = {}
+            ECCFiles = []
+            EPPFiles = []
+            ObjLink = []
+            os.chdir(IntDir)
+            ListSource(CData, Rebuild, SrcCompile, ObjLink)
+            os.chdir(TmpDir)
+            PkgCfg = PkgConfig(CData)
+
+            if SrcCompile:
+              def MkCmd(file, source, compiler):
+                with open(file, 'w') as LccPar:
+                  LccPar.write('-c ') # Just compile
+                  # Compile parameters
+                  if CData.get(COMMON, {}):
+                    if CData[COMMON].get(COMPILE, {}):
+                      for v in CData[COMMON][COMPILE].get(COMMON, {}):
+                        LccPar.write('{0} '.format(MacroResolve(v.strip())))
+                      for v in CData[COMMON][COMPILE].get(compiler, {}):
+                        LccPar.write('{0} '.format(MacroResolve(v.strip())))
+                    if CData[COMMON].get(SETTINGS, {}): # Settings
+                      for v in CData[COMMON][SETTINGS].get(COMMON, {}):
+                        LccPar.write('-s {0} '.format(MacroResolve(v.strip())))
+                      for v in CData[COMMON][SETTINGS].get(compiler, {}):
+                        LccPar.write('-s {0} '.format(MacroResolve(v.strip())))
+                  if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}):
+                    if CData[Platform][Configuration].get(COMPILE, {}):
+                      for v in CData[Platform][Configuration][COMPILE].get(COMMON, {}):
+                        LccPar.write('{0} '.format(MacroResolve(v.strip())))
+                      for v in CData[Platform][Configuration][COMPILE].get(compiler, {}):
+                        LccPar.write('{0} '.format(MacroResolve(v.strip())))
+                    if CData[Platform][Configuration].get(SETTINGS, {}): # Settings
+                      for v in CData[Platform][Configuration][SETTINGS].get(COMMON, {}):
+                        LccPar.write('-s {0} '.format(MacroResolve(v.strip())))
+                      for v in CData[Platform][Configuration][SETTINGS].get(compiler, {}):
+                        LccPar.write('-s {0} '.format(MacroResolve(v.strip())))
+
+                  if PkgCfg['Bld']:
+                    for v in PkgCfg['Bld']:
+                      LccPar.write('{0} '.format(v))
+                  # Preprocessor Definitions
+                  for v in BuildDef:
+                    LccPar.write('-D"{0}" '.format(v.strip()))
+                  if PkgCfg['Pre']:
+                    for v in PkgCfg['Pre']:
+                      LccPar.write('-D{0} '.format(v))
+                  # Includes
+                  for v in BuildInc:
+                    LccPar.write('-I"{0}" '.format(v.strip()))
+                  if PkgCfg['Inc']:
+                    for v in PkgCfg['Inc']:
+                      LccPar.write('-I{0} '.format(v))
+                  # Source Files
+                  for s in source:
+                    LccPar.write('{0} '.format(s))
+              for s in SrcCompile:
+                if SrcCompile[s] == 0:
+                  ECCFiles.append(s)
+                else:
+                  EPPFiles.append(s)
+              if ECCFiles:
+                MkCmd(Fcompile, ECCFiles, ECC)
+              if EPPFiles:
+                MkCmd(Fcompile2, EPPFiles, EPP)
+
+            StaticLib = False
+            if CData.get(COMMON, {}) and (GENLIB in CData[COMMON]):
+              StaticLib = True
+            if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}) and (GENLIB in CData[Platform][Configuration]):
+              StaticLib = True
+            if StaticLib:
+              if os.path.isfile(OutFile):
+                os.remove(OutFile)
+              if (not OutFile.lower().endswith('.a')):
+                  OutFile += '.a'
+              Of = os.path.basename(OutFile)
+              Op = os.path.dirname(OutFile)
+              if (Of.lower()[:3] != 'lib'):
+                  Of = 'lib' + Of
+              OutFile = os.path.join(Op, Of)
+
+            EmccPacker = False
+            if SrcCompile or (not os.path.exists(OutFile)):
+              with open(FLink, 'w') as LccPar:
+                # Build static library
+                if StaticLib:
+                  print ('Modules will be archived (static lib):')
+                  if (CData.get(COMMON, {}) and (AR in CData[COMMON])):
+                    for v in CData[COMMON].get(AR, []):
+                      LccPar.write('{0} '.format(v.strip()))
+                  if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}) and (AR in CData[Platform][Configuration]):
+                    for v in CData[Platform][Configuration].get(AR, []):
+                      LccPar.write('{0} '.format(v.strip()))
+                  LccPar.write('{0} '.format(OutFile))
+                  CustomMods = False
+                  ModList = []
+                  if (CData.get(COMMON, {}) and (GENLIB in CData[COMMON])):
+                    CustomMods = True
+                    for m in CData[COMMON].get(GENLIB, []):
+                      ModList.append(m)
+                  if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}) and (GENLIB in CData[Platform][Configuration]):
+                    CustomMods = True
+                    for m in CData[Platform][Configuration].get(GENLIB, []):
+                      ModList.append(m)
+                  if not CustomMods:
+                    for o in ObjLink:
+                      LccPar.write('{0} '.format(o))
+                  else:
+                    ModSeek = []
+                    ModSeek.append(IntDir)
+                    if CData.get(LIB_DIR, {}):
+                      for v in CData[LIB_DIR]:
+                        ModSeek.append(FixSlash(MacroResolve(v.strip())))
+                    for Ml in ModList:
+                      MOk = False
+                      for Ms in ModSeek:
+                        Mfile = os.path.join(Ms, Ml)
+                        if os.path.isfile(Mfile):
+                          if (Mfile.endswith('.a')):
+                            ADir = os.path.join(IntDir, Ml)
+                            if os.path.exists(ADir):
+                              shutil.rmtree(ADir)
+                            Mkd(ADir)
+                            CDir = os.path.abspath(os.getcwd())
+                            os.chdir(ADir)
+                            if OsCmd('"{0}" x {1}'.format(AR, Mfile)) == 0:
+                              if OsCmd('"{0}" t {1}'.format(AR, Mfile)) == 0:
+                                for o in OsResp.split('\n'):
+                                  if len(o) > 0:
+                                    MExt = os.path.join(ADir, o)
+                                    if os.path.isfile(MExt):
+                                      LccPar.write('{0} '.format(MExt))
+                                    else:
+                                      print (Fore.YELLOW + 'Bad module [' + o + "] extracted from " + Ml + " !")
+                            os.chdir(CDir)
+                          else:
+                            LccPar.write('{0} '.format(Mfile))
+                          MOk = True
+                          break
+                        else:
+                          for Ol in ObjLink:
+                            if Ol == Mfile:
+                              LccPar.write('{0} '.format(Mfile))
+                              MOk = True
+                              break
+                          if MOk:
+                            break
+                      if not MOk:
+                        print (Fore.YELLOW + 'Module [' + Ml + "] not found!")
+                else:
+                  # Link parameters
+                  if CData.get(COMMON, {}):
+                    for v in CData[COMMON].get(LINK, {}):
+                      LccPar.write('{0} '.format(MacroResolve(v.strip())))
+                    for v in CData[COMMON].get(LSETTINGS, {}): # Settings
+                      LccPar.write('-s {0} '.format(MacroResolve(v.strip())))
+
+                  if CData.get(Platform, {}) and CData[Platform].get(Configuration, {}):
+                    for v in CData[Platform][Configuration].get(LINK, {}):
+                      LccPar.write('{0} '.format(MacroResolve(v.strip())))
+                    for v in CData[Platform][Configuration].get(LSETTINGS, {}): # Settings
+                      LccPar.write('-s {0} '.format(MacroResolve(v.strip())))
+
+                  if CData.get(SHELL_FILE, {}): # Shell File
+                    LccPar.write('--shell-file {0} '.format(MacroResolve(CData.get(SHELL_FILE,''))))
+                  if CData.get(EMBED_FILE, {}): # Embed File
+                    LccPar.write('--embed-file {0} '.format(MacroResolve(CData.get(EMBED_FILE,''))))
+                    EmccPacker = True
+                  if CData.get(PRELOAD_FILE, {}): # Preload File
+                    LccPar.write('--preload-file {0} '.format(MacroResolve(CData.get(PRELOAD_FILE,''))))
+                    EmccPacker = True
+
+                  if PkgCfg['Lnk']:
+                    for v in PkgCfg['Lnk']:
+                      LccPar.write('{0} '.format(v))
+                  # Library Path
+                  if CData.get(LIB_DIR, {}):
+                    for v in CData[LIB_DIR]:
+                      LccPar.write('-L{0} '.format(FixSlash(MacroResolve(v.strip()))))
+                  if PkgCfg['Lpt']:
+                    for v in PkgCfg['Lpt']:
+                      LccPar.write('-L{0} '.format(v))
+                  # Object Files
+                  for o in ObjLink:
+                    LccPar.write('{0} '.format(o))
+                  # Library Files
+                  if CData.get(LIB, {}):
+                    for v in CData[LIB]:
+                      LccPar.write('-l{0} '.format(MacroResolve(v.strip())))
+                  if PkgCfg['Lib']:
+                    for v in PkgCfg['Lib']:
+                      LccPar.write('-l{0} '.format(v))
+                  # Runtime library path
+                  if CData.get(RTLIB_DIR, {}):
+                    for v in CData[RTLIB_DIR]:
+                      LccPar.write('-Wl,-rpath,{0} '.format(MacroResolve(v.strip())))
+
+            if os.path.exists(Fcompile) or os.path.exists(Fcompile2) or os.path.exists(FLink):
+              print ('(Elapsed {:.1f}s)'.format(timer() - tmrCounter))
+              print (Fore.MAGENTA + 'Building...')
+              tmrCounter = timer()
+              os.chdir(IntDir)
+              Ok = 0
+              print (Fore.YELLOW + 'Emcc is compiling sources...')
+              if os.path.exists(Fcompile):
+                Ok = OsCmd('"{0}" @{1}'.format(BuildCmd[0], Fcompile))
+                OsList(True)
+              if os.path.exists(Fcompile2) and (Ok == 0):
+                Ok = OsCmd('"{0}" @{1}'.format(BuildCmd[1], Fcompile2))
+                OsList(True)
+              if os.path.exists(FLink) and (Ok == 0):
+                if StaticLib:
+                  print (Fore.YELLOW + 'Emcc is linking the library...')
+                  if len(BuildCmd[2]) > 1:
+                    Ok = OsCmd('"{0}" @"{1}"'.format(BuildCmd[2], FLink))
+                    OsList(True)
+                    if (Ok == 0) and CData.get(COMMON, {}) and (RANLIB in CData[COMMON]):
+                      if len(BuildCmd[3]) > 1:
+                        RlPar = ''
+                        for v in CData[COMMON].get(RANLIB, []):
+                          RlPar += '"{0}" '.format(v.strip())
+                        Ok = OsCmd('"{0}" {1} "{2}"'.format(BuildCmd[3], RlPar, OutFile))
+                        OsList(True)
+                      else:
+                        print (Fore.YELLOW + 'No RANLIB command found to update symbol table.')
+                  else:
+                    print (Fore.YELLOW + 'No AR command found to link statically!')
+                    Ok =1
+                else:
+                  print (Fore.YELLOW + 'Emcc is linking the binary application...')
+                  if EmccPacker:
+                    os.chdir(RunDir)
+                  Ok = OsCmd('"{0}" @"{1}"'.format(BuildCmd[1], FLink))
+                  OsList(True)
+              if Ok > 0:
+                DumpMessages()
+                print (Back.RED + ' ' + Fore.RED + Back.RESET + ' Build error! ' + Fore.RESET + '(Elapsed {:.1f}s)'.format(timer() - tmrCounter))
+              else:
+                print (Back.GREEN + ' ' + Fore.GREEN + Back.RESET + ' Build Ok. ' + Fore.RESET + '(Elapsed {:.1f}s)'.format(timer() - tmrCounter))
+                Ret = 0
+            else:
+              print (Back.YELLOW + ' ' + Fore.YELLOW + Back.RESET + ' Nothing to build. ' + Fore.RESET + '(Elapsed {:.1f}s)'.format(timer() - tmrCounter))
+              Ret = 0
+            if args.run and os.path.exists(OutFile):
+              print (Fore.MAGENTA + 'Running...')
+              print (OutFile)
+              OsCmd(FixSlash(OutFile) + '\n', False)
+          else:
+            print (Fore.WHITE + Back.RED + 'Missing building tools!')
+        else:
+          print (Fore.WHITE + Back.RED + 'No Clang compiler found!')
+
+  elif Command == CMD_HOST:
+    HDir = args.hostdir
+    if not HDir:
+      HDir = os.getcwd()
+    HPort = int(args.hostport)
+    if not HPort:
+      HPort = 8080
+    SPage = args.startpage
+    if not SPage:
+      SPage = 'index.html'
+    Url = 'http://127.0.0.1:' + str(HPort) + '/' + SPage
+    class Handler(http.server.SimpleHTTPRequestHandler):
+      def __init__(self, *args, **kwargs):
+        self.path = SPage
+        super().__init__(*args, directory=HDir, **kwargs)
+    with socketserver.TCPServer(("", HPort), Handler) as httpd:
+      print('Starting http server...')
+      print('Accessing ' + Url + '...')
+      webbrowser.open(Url)
+      httpd.serve_forever()
 
   else:
     print ('Invalid command ' + Fore.YELLOW + Command)
