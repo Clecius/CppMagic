@@ -374,6 +374,93 @@ cppmagic.py build -m clang -p x64 -c debug
 ---
 <br>
 
+## Simple EMCC Project on Linux
+You will need a Linux system with Python 3 (and Colorama) and [emscripten](https://emscripten.org/) installed.
+
+>This command will create a very simple project structure.
+```
+cppmagic.py prepare -m emcc -e simple
+```
+```
+.
+├── cppmagic
+│   ├── emcc-wasm.json  <- EMCC options for Wasm
+│   └── project.json    <- Project configuration
+├── include
+├── library
+│   └── emcc-linux
+│       └── wasm
+│           └── debug
+└── source
+    └── main.cpp        <- Sample source file
+```
+>EMCC compiler needs a HTML special file to compile.
+>>You can copy a sample file from **emscripten** SDK or point the **'shell_file'** parameter from **emcc-wasm.json** to it.
+```
+cp /emsdk/upstream/emscripten/src/shell.html source/shell.html
+```
+
+``` json
+  ...
+
+  "out_file": "${OutDir}${ProjectName}.html",
+  "shell_file": "${ProjectDir}source/shell.html",  <- Shell file indicator
+  "common": {
+
+  ...
+```
+
+>Now lets compile it.
+```
+cppmagic.py build -m emcc -p wasm -c release
+```
+
+```
+.
+├── build
+│   ├── emcc-linux
+│   │   └── wasm
+│   │       └── release
+│   │           ├── Example.html    <- Generated final html file
+│   │           ├── Example.js      <- Generated final js file
+│   │           ├── Example.wasm    <- Generated final binary file
+│   │           └── intermediate
+│   │               └── Example
+│   │                   └── main.o  <- Object file from source code
+│   └── run
+├── cppmagic
+│   ├── emcc-wasm.json
+│   └── project.json
+├── include
+├── library
+│   └── emcc-linux
+│       └── wasm
+│           └── debug
+├── source
+│   ├── main.cpp
+│   └── shell.html
+└── temp
+    └── emcc
+        ├── config.json       <- Big Json file (mix from project and gcc-linux)
+        ├── emcc-header.json  <- ( CppMagic build control file )
+        ├── emcc-lnk.par      <- Compile command line
+        └── emcc-lpp.par      <- Compile command line
+```
+>To see the result, let's start a Python Http Server pointed to compiled files directory.
+
+```
+python3 -m http.server 8080 --directory ./build/emcc-linux/wasm/release/
+```
+>And access a local address through a Browser.
+```
+http://127.0.0.1:8080/Example.html
+```
+
+<br>
+
+---
+<br>
+
 ## Visual Studio Code
 If you want to use Visual Studio Code editor, CppMagic helps to create some Json files for VSCode based on project configurations.
 

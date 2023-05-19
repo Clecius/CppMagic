@@ -1076,11 +1076,10 @@ def CheckConfig(force):
             CLEAN: ['*.js', '*.wasm', '*.data'],
             OUT_FILE: '${OutDir}${ProjectName}.html',
             SHELL_FILE: '${ProjectDir}source/shell.html',
-            PRELOAD_FILE: 'splash.png',
             COMMON: {
               PREPROC: [],
               SETTINGS: {
-                COMMON: ['USE_GLFW=3'],
+                COMMON: [],
                 ECC: [],
                 EPP: []
               },
@@ -1089,23 +1088,23 @@ def CheckConfig(force):
                 ECC: [],
                 EPP: []
               },
-              LSETTINGS: ['ASYNCIFY'],
+              LSETTINGS: [],
               LINK: ['-o${outfile}']
             },
             WASM:{
               DEBUG: {
                 PREPROC: ['DEBUG', '_DEBUG'],
                 COMPILE: {
-                  COMMON: ['-m64', '-O0', '-g3', '-ggdb3', '-gdwarf', '-gdwarf-4']
+                  COMMON: ['-O0', '-g3', '-ggdb3', '-gdwarf', '-gdwarf-4']
                 },
-                LINK: ['-m64']
+                LINK: []
               },
               RELEASE: {
                 PREPROC: ['DNDEBUG'],
                 COMPILE: {
-                  COMMON: ['-m64', '-O2']
+                  COMMON: ['-O2']
                 },
-                LINK: ['-m64']
+                LINK: []
               }
             }
           }
