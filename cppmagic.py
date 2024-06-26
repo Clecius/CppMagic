@@ -11,7 +11,7 @@
 
 # pylint: disable=E1101
 
-VERSION = '0.9.993'
+VERSION = '0.9.994'
 
 import platform
 import os
@@ -966,7 +966,8 @@ def CheckConfig(force):
               COMPILE: {
                 COMMON: ['-Wall', '-Wextra', '-Wshadow', '-Wformat-security', '-Winit-self', '-fPIC'],
                 GCC: ["-Wmissing-prototypes"],
-                GPP: ["-std=c++17"]
+                GPP: ["-std=c++17"],
+                GPP: ["-Werror=return-type"]
               },
               LINK: ['-o${outfile}']
             },
@@ -1032,7 +1033,8 @@ def CheckConfig(force):
               COMPILE: {
                 COMMON: ['-Wall', '-Wextra', '-Wshadow', '-Wformat-security', '-Winit-self', '-fPIC'],
                 GCC: ["-Wmissing-prototypes"],
-                GPP: ["-std=c++17"]
+                GPP: ["-std=c++17"],
+                GPP: ["-Werror=return-type"]
               },
               LINK: ['-o${outfile}']
             },
@@ -1528,7 +1530,20 @@ if __name__ == '__main__':
         VsTask['tasks'].append(T)
       AddTsk('CppMagic - Discovery', [CMD_DISCOVER])
       AddTsk('CppMagic - Prepare Project', [CMD_PREPARE])
-      AddTsk('CppMagic - Prepare Visual Studio Code', [CMD_PREPARE, '-e', ENV_VSCODE])
+
+      PrepMode = ''
+      if (Mode == MODE_ALL):
+        if (platform.system().lower() == 'windows'):
+          PrepMode = MODE_MSVC
+        else:
+          PrepMode = MODE_GCC
+      else:
+        PrepMode = Mode
+      if len(PrepMode) > 0:
+        AddTsk('CppMagic - Prepare Visual Studio Code', [CMD_PREPARE, '-e', ENV_VSCODE, '-m', PrepMode])
+      else:
+        AddTsk('CppMagic - Prepare Visual Studio Code', [CMD_PREPARE, '-e', ENV_VSCODE])
+
       for m, d in MAll.items():
         PrjJsonLoaded = False
         MDat = LoadConfig(d)
