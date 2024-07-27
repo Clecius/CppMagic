@@ -11,7 +11,7 @@
 
 # pylint: disable=E1101
 
-VERSION = '0.9.994'
+VERSION = '0.9.995'
 
 import platform
 import os
@@ -50,6 +50,7 @@ CMD_REBUILD = 'rebuild'
 CMD_CLEAN = 'clean'
 CMD_PREPARE = 'prepare'
 CMD_DISCOVER = 'discover'
+CMD_INSTALL = 'install'
 CMD_HOST = 'host'
 
 MODE_ALL = 'all'
@@ -64,6 +65,9 @@ ENV_VSCODE = 'vscode'
 PROJECT_NAME = 'project_name'
 INCLUDE = 'include'
 SOURCE = 'source'
+INSTALL = 'install'
+PREFIX = 'prefix'
+OUTPUT = 'output'
 CLEAN = 'clean'
 OUT_DIR = 'out_dir'
 OUT_FILE = 'out_file'
@@ -961,6 +965,23 @@ def CheckConfig(force):
             LIB: ['stdc++', 'pthread'],
             CLEAN: [],
             OUT_FILE: '${OutDir}${ProjectName}',
+            INSTALL: {
+              PREFIX: "/somedir/libs/project",
+              OUTPUT: [
+                {
+                  'sub_dir': 'include',
+                  'files': [
+                    '${ProjectDir}src/header.hpp',
+                  ]
+                },
+                {
+                  'sub_dir': 'lib/${Mode}-${System}/${Platform}',
+                  'files': [
+                    '${OutFile}'
+                  ]
+                }
+              ]
+            },
             COMMON: {
               PREPROC: [],
               COMPILE: {
@@ -1200,6 +1221,7 @@ def choicesDescriptions():
   Desc += Y + '  clean' + R + ' ...: Erase C++ binaries.\n'
   Desc += Y + '  discover' + R + ' : Try to locate C++ compilers available.\n'
   Desc += Y + '  prepare' + R + ' .: Prepare environments.\n'
+  Desc += Y + '  install' + R + ' .: Install files to a specific location.\n'
   Desc += Y + '  host' + R + ' ....: Host a webserver.\n'
 
   Desc += M + "\nOptions:\n"
@@ -1240,12 +1262,12 @@ if __name__ == '__main__':
   if not _check_modules():
     exit(1)
 
-  print (Fore.YELLOW + '\nCppMagic - v' + VERSION + Fore.RESET + ' by Deoclecio Freire 2019-2023')
+  print (Fore.YELLOW + '\nCppMagic - v' + VERSION + Fore.RESET + ' by Deoclecio Freire 2019-2024')
 
   parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
                                    epilog=choicesDescriptions())
   parser.add_argument('command', action='store', type= lambda s: s.lower(),
-                      choices=[CMD_BUILD, CMD_REBUILD, CMD_CLEAN, CMD_PREPARE, CMD_DISCOVER, CMD_HOST],
+                      choices=[CMD_BUILD, CMD_REBUILD, CMD_CLEAN, CMD_PREPARE, CMD_DISCOVER, CMD_INSTALL, CMD_HOST],
                       help='See commands below.')
   parser.add_argument('-m', '--mode', type= lambda s: s.lower(),
                       choices=[MODE_ALL, MODE_MSVC, MODE_GCC, MODE_CLANG, MODE_EMCC],
@@ -1562,6 +1584,7 @@ if __name__ == '__main__':
                 AddTsk('Build' + Desc, [CMD_BUILD, '-m', m, '-p', p, '-c', c], Prob, True)
                 AddTsk('Rebuild' + Desc, [CMD_REBUILD, '-m', m, '-p', p, '-c', c], Prob)
                 AddTsk('Clean' + Desc, [CMD_CLEAN, '-m', m, '-p', p, '-c', c])
+                AddTsk('Install' + Desc, [CMD_INSTALL, '-m', m, '-p', p, '-c', c])
       if os.path.exists(FTask) and ConfigBak:
         Bak = FTask + '.bak'
         if os.path.exists(Bak):
@@ -2666,6 +2689,89 @@ if __name__ == '__main__':
             print (Fore.WHITE + Back.RED + 'Missing building tools!')
         else:
           print (Fore.WHITE + Back.RED + 'No Clang compiler found!')
+
+  elif Command == CMD_INSTALL: # --== INSTALL ==--
+    print (Fore.MAGENTA + 'Installing...')
+    if not Mode:
+      print(Fore.YELLOW + 'Inform a compiler! (-m option)')
+      exit(1)
+    if Mode == MODE_EMCC:
+      Platform = WASM
+    if not Platform:
+      print(Fore.YELLOW + 'Inform a platform! (-p option)')
+      exit(1)
+    if Platform == WASM:
+      Mode = MODE_EMCC
+    if not Configuration:
+      print(Fore.YELLOW + 'Inform a configuration! (-c option)')
+      exit(1)
+    print (Fore.CYAN + '[' + Mode + ' ' + Platform + ' ' + Configuration + ']')
+    Ok = False
+    CData = MakeEnv(CheckConfig(False))
+    if len(CData) > 0:
+      if PrjJsonLoaded:
+        if CData.get(INSTALL, {}):
+          if CData[INSTALL].get(PREFIX, {}) and (CData[INSTALL][PREFIX] != ''):
+            if CData[INSTALL].get(OUTPUT, {}) and CData[INSTALL][OUTPUT]:
+              Ok = True
+            else:
+              print(Fore.RED + 'No output options available for install.' + Fore.RESET)
+              exit(1)
+          else:
+            print(Fore.RED + 'No prefix options available for install.' + Fore.RESET)
+            exit(1)
+        else:
+          print(Fore.RED + 'No install options available.' + Fore.RESET)
+          exit(1)
+      else:
+        print(Fore.RED + 'Cannot proceed without a project configuration file.' + Fore.RESET)
+        exit(1)
+    else:
+      print(Fore.RED + 'Cannot proceed with bad or empty configuration file.' + Fore.RESET)
+      exit(1)
+    if Ok:
+      Prefix = os.path.abspath(MacroResolve(CData[INSTALL][PREFIX].strip()))
+      Output = []
+      for o in CData[INSTALL][OUTPUT]:
+        if o.get('sub_dir', {}) and (o['sub_dir'] != ''):
+          ToPath = os.path.join(Prefix, MacroResolve(o['sub_dir'].strip()))
+          if o.get('files', {}) and o['files']:
+            for f in o['files']:
+              FromFile = f.strip()
+              if FromFile != '':
+                FromFile = MacroResolve(FromFile)
+                ToFile = os.path.basename(FromFile)
+                ToFile = os.path.join(ToPath, ToFile)
+                Otp = {}
+                Otp['FFrom'] = FromFile
+                Otp['FTo'] = ToFile
+                Output.append(Otp)
+          else:
+            print(Fore.RED + 'No files option available.' + Fore.RESET)
+            exit(1)
+        else:
+          print(Fore.RED + 'No subdir option available.' + Fore.RESET)
+          exit(1)
+      if not os.path.exists(Prefix):
+        os.makedirs(Prefix)
+      if os.path.exists(Prefix):
+        print('Installing on ' + Fore.YELLOW + Prefix)
+        Count = 0
+        for o in Output:
+          if os.path.exists(o['FFrom']):
+            OPath = os.path.dirname(o['FTo'])
+            if not os.path.exists(OPath):
+              os.makedirs(OPath)
+            shutil.copyfile(o['FFrom'], o['FTo'])
+            print('  ' + o['FFrom'] + ' -> ' + Fore.YELLOW + o['FTo'])
+            Count += 1
+          else:
+            print('  ' + o['FFrom'] + Fore.RED + ' ( NOT FOUND )')
+        print (Fore.YELLOW + '{0} files copied.'.format(Count))
+        Ret = 0
+      else:
+        print(Fore.RED + 'Cannot create destination install path (prefix).' + Fore.RESET + '[' + ToPath + ']')
+        exit(1)
 
   elif Command == CMD_HOST:
     HDir = args.hostdir
